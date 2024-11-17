@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat and Voice</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            transition: background-color 0.5s, color 0.5s;
+        }
+        ul { list-style-type: none; margin: 0; padding: 0; }
+        li { padding: 8px; margin-bottom: 10px; background-color: #f3f3f3; }
+        input { padding: 10px; width: 80%; }
+        button { padding: 10px; }
+        #chat { position: fixed; bottom: 0; width: 100%; background-color: #fff; padding: 10px; box-shadow: 0 -2px 5px rgba(0,0,0,0.1); }
+        #messages { max-height: 200px; overflow-y: auto; margin-bottom: 10px; }
+        #voice-channel { margin-top: 20px; }
+        body.dark-mode { background-color: rgb(31,31,31); color: #ffffff; }
+        body.dark-mode ul { background-color: #333333; }
+        .dropdown { position: relative; display: inline-block; }
+        .dropdown-content { display: none; position: absolute; background-color: #f9f9f9; min-width: 160px; box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2); z-index: 1; }
+        .dropdown:hover .dropdown-content { display: block; }
+        .dropdown-content input { width: 100%; }
+        #toggleDarkMode { position: fixed; top: 10px; right: 10px; }
+    </style>
+</head>
+<body>
+    <div id="voice-channel">
+        <h3>Voice Channel</h3>
+        <button id="joinRoom">Join Room</button>
+        <button id="leaveRoom" style="display:none;">Leave Room</button>
+        <button id="shareScreen" style="display:none;">Share Screen</button>
+        <button id="stopShareScreen" style="display:none;">Stop Sharing</button>
+        <ul id="voice-users"></ul>
+    </div>
+    <video id="screenVideo" autoplay></video>
+    <div id="chat">
+        <ul id="messages"></ul>
+        <form id="form" action="">
+            <input id="input" autocomplete="off" /><button>Send</button>
+        </form>
+    </div>
+    <button id="toggleDarkMode">Toggle Dark Mode</button>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        var socket = io();
+        var form = document.getElementById('form');
+        var input = document.getElementById('input');
+        var joinRoomButton = document.getElementById('joinRoom');
+        var leaveRoomButton = document.getElementById('leaveRoom');
+        var shareScreenButton = document.getElementById('shareScreen');
+        var stopShareScreenButton = document.getElementById('stopShareScreen');
+        var toggleDarkModeButton = document.getElementById('toggleDarkMode');
+        var voiceUsersList = document.getElementById('voice-users');
+        var screenVideo = document.getElementById('screenVideo');
+        var messages = document.getElementById('messages');
+        var localStream;
+        var screenStream;
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            if (input.value) {
+                socket.emit('chat message', input.value);
+                input.value = '';
+            }
+        });
+
+        socket.on('chat message', function(msg) {
+            var item = document.createElement('li');
+            item.textContent = msg;
+            messages.appendChild(item);
+            messages.scrollTop = messages.scrollHeight;
+        });
+
+        joinRoomButton.addEventListener('click', async () => {
+            localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const room = 'default';
+            socket.emit('join', room);
+            joinRoomButton.style.display = 'none';
+            leaveRoomButton.style.display = 'inline';
+            shareScreenButton.style.display = 'inline';
+
+            var userItem = document.createElement('li');
+            userItem.classList.add('dropdown');
+            userItem.setAttribute('data-id', socket.id);
+            userItem.innerHTML = `
+                <span>User ${socket.id}</span>
+                <div class="dropdown-content">
+                    <input type="range" min="0" max="1" step="0.1" value="1" id="volumeControl">
+                </div>
+            `;
+            voiceUsersList.appendChild(userItem);
+
+            document.getElementById('volumeControl').oninput = function() {
+                socket.emit('set volume', { id: socket.id, volume: this.value });
+            };
+        });
+
+        leaveRoomButton.addEventListener('click', () => {
+            const room = 'default';
+            socket.emit('leave', room);
+            joinRoomButton.style.display = 'inline';
+            leaveRoomButton.style.display = 'none';
+            shareScreenButton.style.display = 'none';
+            stopShareScreenButton.style.display = 'none';
+            var userItem = document.querySelector(`li[data-id="${socket.id}"]`);
+            if (userItem) {
+                userItem.remove();
+            }
+        });
+
+        shareScreenButton.addEventListener('click', async () => {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            screenVideo.srcObject = screenStream;
+            const room = 'default';
+            socket.emit('screen share', { room: room, stream: screenStream });
+            shareScreenButton.style.display = 'none';
+            stopShareScreenButton.style.display = 'inline';
+        });
+
+        stopShareScreenButton.addEventListener('click', () => {
+            if (screenStream) {
+                let tracks = screenStream.getTracks();
+                tracks.forEach(track => track.stop());
+                screenVideo.srcObject = null;
+                const room = 'default';
+                socket.emit('stop screen share', { room: room });
+                stopShareScreenButton.style.display = 'none';
+                shareScreenButton.style.display = 'inline';
+            }
+        });
+
+        socket.on('user joined', (id) => {
+            console.log('User joined:', id);
+            var userItem = document.createElement('li');
+            userItem.classList.add('dropdown');
+            userItem.setAttribute('data-id', id);
+            userItem.innerHTML = `
+                <span>User ${id}</span>
+                <div class="dropdown-content">
+                    <input type="range" min="0" max="1" step="0.1" value="1" id="volumeControl-${id}">
+                </div>
+            `;
+            voiceUsersList.appendChild(userItem);
+
+            document.getElementById(`volumeControl-${id}`).oninput = function() {
+                socket.emit('set volume', { id: id, volume: this.value });
+            };
+        });
+
+        socket.on('user left', (id) => {
+            console.log('User left:', id);
+            var userItem = document.querySelector(`li[data-id="${id}"]`);
+            if (userItem) {
+                userItem.remove();
+            }
+        });
+
+        toggleDarkModeButton.addEventListener('click', () => {
+            document.body.classList.toggle('dark-mode');
+        });
+
+        socket.on('user list', function(users) {
+            for (var id in users) {
+                var item = document.createElement('li');
+                item.textContent = `User ${id} - Volume: ${users[id].volume}`;
+                voiceUsersList.appendChild(item);
+            }
+        });
+
+        socket.on('screen share', (data) => {
+            screenVideo.srcObject = data.stream;
+        });
+
+        socket.on('stop screen share', () => {
+            screenVideo.srcObject = null;
+        });
+    </script>
+</body>
+</html>
